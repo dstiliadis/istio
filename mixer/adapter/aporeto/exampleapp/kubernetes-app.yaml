@@ -54,4 +54,37 @@ spec:
         backend:
           serviceName: demo 
           servicePort: 80
+      - path: /admin 
+        backend:
+          serviceName: demo 
+          servicePort: 80
 ---
+apiVersion: extensions/v1beta1
+kind: ReplicaSet
+metadata:
+  name: demo-client 
+  namespace: apowine
+  labels:
+    role: client
+    drink: wine
+    app: wine-getter
+    type: cli
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wine-getter
+  template:
+    metadata:
+      name: apowine-wine-getter
+      labels:
+        role: client
+        app: wine-getter
+        type: cli
+    spec:
+      containers:
+          - name: client
+            image: aporeto/apowine-clientcurl:latest
+            env:
+            - name: URI
+              value: "demo.apowine.svc.cluster.local/internal"

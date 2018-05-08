@@ -115,14 +115,14 @@ func (h *handler) HandleAuthorization(ctx context.Context, insts *authorization.
 	cache, ok := h.serviceMap[insts.Action.Service]
 	if !ok {
 		return adapter.CheckResult{
-			Status: status.WithPermissionDenied("uknown service - rejected"),
+			Status: status.WithPermissionDenied("Uknown Service\n"),
 		}, nil
 	}
 
 	found := cache.FindAndMatchScope(insts.Action.Method, insts.Action.Path, labels)
 	if !found {
 		return adapter.CheckResult{
-			Status: status.WithPermissionDenied("uknown method or path - rejected"),
+			Status: status.WithPermissionDenied("Authorization Rejected By Policy\n"),
 		}, nil
 	}
 

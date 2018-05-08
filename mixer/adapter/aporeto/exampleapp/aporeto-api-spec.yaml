@@ -9,8 +9,7 @@ endpoints:
   - GeT
 - URI: "/internal/*"
   scopes:
-  - scope:admin 
-  - scope:app
+  - role=client
   methods:
   - GET 
 - URI: "/public/*"
