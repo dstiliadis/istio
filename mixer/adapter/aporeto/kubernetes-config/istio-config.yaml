@@ -1,0 +1,98 @@
+apiVersion: "config.istio.io/v1alpha2"
+kind: authorization
+metadata:
+  name: requestcontext
+  namespace: istio-system
+spec:
+  subject:
+    user: source.user | ""
+    groups: 
+    properties:
+      labels: source.labels 
+      k8s:namespace: source.namespace | ""
+      k8s:service: source.service 
+      k8s:serviceAccount: source.serviceAccount
+  action:
+    namespace: destination.namespace | ""
+    service: destination.service | ""
+    method: request.method | ""
+    path: request.path | ""
+    properties:
+      app: destination.labels["app"] | ""
+      version: destination.labels["version"] | ""
+---
+apiVersion: "config.istio.io/v1alpha2"
+kind: aporeto
+metadata:
+  name: handler
+  namespace: istio-system
+spec:
+  namespace: "/apomux"
+  uri: "https://192.168.100.1:4443"
+  certificate: |
+    -----BEGIN CERTIFICATE-----
+    MIIBrDCCAVOgAwIBAgIRAJQMmzVRvEIXF8NUUzARXa8wCgYIKoZIzj0EAwIwRjEQ
+    MA4GA1UEChMHQXBvcmV0bzEPMA0GA1UECxMGYXBvbXV4MSEwHwYDVQQDExhBcG9t
+    dXggUHVibGljIFNpZ25pbmcgQ0EwHhcNMTgwNTA3MTUxMzM3WhcNMTkwNzIwMDcw
+    MDAwWjAzMQ8wDQYDVQQKEwZhcG9tdXgxEDAOBgNVBAsTB2Fwb3JldG8xDjAMBgNV
+    BAMTBWlzdGlvMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvU1i2NLnfR+lWhfx
+    3+GAwaNPx8sjC0Y72CmDRBUnXuPQ7hCREpOLIHWp2/cl4nPD0ocFmNRDQEWCKiSw
+    jSwBP6M1MDMwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMCMAwG
+    A1UdEwEB/wQCMAAwCgYIKoZIzj0EAwIDRwAwRAIgBAVseKNr2A4BWzVhq2+GwhCA
+    Q5tRDLiqT4CVrcan6mQCIE7bYV1N4YmEm3juVRfqQEZN4zw1CYvA/ESBAF/bvkTS
+    -----END CERTIFICATE-----
+  key: | 
+    -----BEGIN EC PRIVATE KEY-----
+    Proc-Type: 4,ENCRYPTED
+    DEK-Info: AES-256-CBC,046fe53688128a08bd1a3181e95ce708
+
+    rLiTjFglhiEX2rDA/I7WHMVmUZDscO4y5iMvZTF7ggEa13rfOS9zyUPQjSiSMAKq
+    xobuBrnp/WzTFuP38zX9rd04ypH8cuT16XI41rVCaOFWzxxRhRtVYvPJdpxFWF1w
+    NpEt3zfc+blI9cFICt48J06u6qtyLcyAJo7QCxfVL94=
+    -----END EC PRIVATE KEY-----
+  ca: | 
+    -----BEGIN CERTIFICATE-----
+    MIIBqzCCAVGgAwIBAgIQW5GcPN9x/GTdXuepp2Ty8jAKBggqhkjOPQQDAjBEMRAw
+    DgYDVQQKEwdBcG9yZXRvMQ8wDQYDVQQLEwZhcG9tdXgxHzAdBgNVBAMTFkFwb211
+    eCBJbnRlcm1lZGlhdGUgQ0EwHhcNMTgwNDEzMjAyNzA2WhcNMjgwMjIwMjAyNzA2
+    WjBGMRAwDgYDVQQKEwdBcG9yZXRvMQ8wDQYDVQQLEwZhcG9tdXgxITAfBgNVBAMT
+    GEFwb211eCBQdWJsaWMgU2lnbmluZyBDQTBZMBMGByqGSM49AgEGCCqGSM49AwEH
+    A0IABKX1ZdINXYdXXwBYTdRd3gbKG7fE6EfdWR9ZRiSgfgZkgbpQq5Cx/2SZ4kfz
+    VEL6NLeC0asNV12X/LSwBwg+kNyjIzAhMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMB
+    Af8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIDNJafSEW+rIW5rR2Jl09KbZBdp2
+    /AEEqW3eC1Q3O+LGAiEAm3MTcwb11mK0DUekTal85ZurJYxzBaA7nJJl0lVH2sQ=
+    -----END CERTIFICATE-----
+    -----BEGIN CERTIFICATE-----
+    MIIBozCCAUigAwIBAgIRAMSUKIcLlZHjRV3j7PEsS8owCgYIKoZIzj0EAwIwPDEQ
+    MA4GA1UEChMHQXBvcmV0bzEPMA0GA1UECxMGYXBvbXV4MRcwFQYDVQQDEw5BcG9t
+    dXggUm9vdCBDQTAeFw0xODA0MTMyMDI3MDZaFw0yODAyMjAyMDI3MDZaMEQxEDAO
+    BgNVBAoTB0Fwb3JldG8xDzANBgNVBAsTBmFwb211eDEfMB0GA1UEAxMWQXBvbXV4
+    IEludGVybWVkaWF0ZSBDQTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABFJKQ/f0
+    tQGlJtWacl8LdIZe/b8ETNifRL47R1cjAkOAZ0I6ZCpBoBOshX9dDjG4yK/1bYcO
+    Fp3s3pguNsxjh6WjIzAhMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/
+    MAoGCCqGSM49BAMCA0kAMEYCIQCOWPF1JgtBHZabA4lOZ0xBJ+RR3yinTY0W8Tcu
+    28i0pgIhALXbiMP+kEUtO7gAjDDR5rMrlMUR48A0jYTsdsdEQTaV
+    -----END CERTIFICATE-----
+    -----BEGIN CERTIFICATE-----
+    MIIBmTCCAT+gAwIBAgIQcclf0QT1JAndUrOfDxE70TAKBggqhkjOPQQDAjA8MRAw
+    DgYDVQQKEwdBcG9yZXRvMQ8wDQYDVQQLEwZhcG9tdXgxFzAVBgNVBAMTDkFwb211
+    eCBSb290IENBMB4XDTE4MDQxMzIwMjcwNloXDTI4MDIyMDIwMjcwNlowPDEQMA4G
+    A1UEChMHQXBvcmV0bzEPMA0GA1UECxMGYXBvbXV4MRcwFQYDVQQDEw5BcG9tdXgg
+    Um9vdCBDQTBZMBMGByqGSM49AgEGCCqGSM49AwEHA0IABEmwcXitc9TFq2jNhub0
+    Fbo+q9OtIg2eoTPc6AKo0GA3DKo5nUnqcurKAIbvbuSUeXcSTIvL7bEqhzQPLJl9
+    v6+jIzAhMA4GA1UdDwEB/wQEAwIBBjAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49
+    BAMCA0gAMEUCIQD5DuzoqzE0Pjqo0I99B8vsZaZf7rRoaCPsSGJ3fVKdMgIgBmYV
+    6K9rSISoeGVnRulgq6I8qsTNrcryj4DWf+RARXg=
+    -----END CERTIFICATE-----
+---
+apiVersion: "config.istio.io/v1alpha2"
+kind: rule
+metadata:
+  name: rbaccheck
+  namespace: istio-system
+spec:
+  match: "true"
+  actions:
+  - handler: handler.aporeto
+    instances:
+    - requestcontext.authorization

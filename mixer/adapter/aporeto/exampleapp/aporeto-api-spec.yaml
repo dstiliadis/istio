@@ -1,0 +1,21 @@
+name: apispec
+description: My Demo API Service
+endpoints:
+- URI: "/admin/*"
+  scopes:
+  - scope:admin
+  - data:organization=aporeto.com
+  methods:
+  - GeT
+- URI: "/internal/*"
+  scopes:
+  - scope:admin 
+  - scope:app
+  methods:
+  - GET 
+- URI: "/public/*"
+  public: true
+  methods:
+  - gET
+associatedTags:
+- spec:api=demo

@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package adapter.aporeto.config;
+
+// import "google/protobuf/duration.proto";
+import "gogoproto/gogo.proto";
+
+option go_package="config";
+// Params 
+message Params {
+    // Uri is the uri of the Aporeto policy system API endpoint 
+    string uri = 1;
+
+    // Namespace is the Aporeto namespace for policies 
+    string namespace = 2;
+
+    // Certificate is the certificate to authenticate with Aporeto
+    string certificate = 3;
+
+    // key is the the corresponding private key
+    string key = 4;
+
+    // ca is the Aporeto system CA 
+    string ca = 5; 
+}

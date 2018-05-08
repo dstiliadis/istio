@@ -1,0 +1,57 @@
+apiVersion: extensions/v1beta1
+kind: ReplicaSet
+metadata:
+  labels:
+      app: demoapp
+      role: backend
+  name: demoapp 
+  namespace: apowine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demoapp 
+  template:
+    metadata:
+      labels:
+          app: demoapp 
+          role: backend
+    spec:
+      containers:
+        - image: dimitrihub/demoapp 
+          imagePullPolicy: Always
+          name: demoapp 
+---
+kind: Service
+apiVersion: v1
+metadata:
+  name: demo 
+  namespace: apowine
+spec:
+  selector:
+      app: demoapp 
+      role: backend
+  ports:
+    - port: 80
+      name: http 
+---
+apiVersion: extensions/v1beta1
+kind: Ingress
+metadata:
+  name: gateway
+  namespace: apowine 
+  annotations:
+    kubernetes.io/ingress.class: "istio"
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /public
+        backend:
+          serviceName: demo 
+          servicePort: 80
+      - path: /internal 
+        backend:
+          serviceName: demo 
+          servicePort: 80
+---

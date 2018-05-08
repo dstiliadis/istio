@@ -1,0 +1,8 @@
+name: ingressspec 
+description: Ingress API Spec 
+endpoints:
+- URI: "/*"
+  public: true
+  methods: [GET, POST, PATCH, HEAD ]
+associatedTags:
+- spec:api=ingress
