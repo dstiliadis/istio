@@ -1,3 +1,4 @@
+aporeto: "istio.io/istio/mixer/adapter/aporeto"
 circonus: "istio.io/istio/mixer/adapter/circonus"
 denier: "istio.io/istio/mixer/adapter/denier"
 dogstatsd: "istio.io/istio/mixer/adapter/dogstatsd"

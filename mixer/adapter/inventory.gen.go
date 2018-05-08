@@ -17,6 +17,7 @@
 package adapter
 
 import (
+	aporeto "istio.io/istio/mixer/adapter/aporeto"
 	circonus "istio.io/istio/mixer/adapter/circonus"
 	denier "istio.io/istio/mixer/adapter/denier"
 	dogstatsd "istio.io/istio/mixer/adapter/dogstatsd"
@@ -39,6 +40,7 @@ import (
 // Inventory returns the inventory of all available adapters.
 func Inventory() []adptr.InfoFn {
 	return []adptr.InfoFn{
+		aporeto.GetInfo,
 		circonus.GetInfo,
 		denier.GetInfo,
 		dogstatsd.GetInfo,
