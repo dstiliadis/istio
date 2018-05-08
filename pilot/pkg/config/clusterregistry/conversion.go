@@ -16,11 +16,10 @@ package clusterregistry
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
+	"sync"
 
 	multierror "github.com/hashicorp/go-multierror"
-	"go.uber.org/multierr"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
@@ -34,9 +33,6 @@ import (
 
 // annotations for a Cluster
 const (
-	// the pilot's endpoint IP address where this cluster is part of
-	ClusterPilotEndpoint = "config.istio.io/pilotEndpoint"
-
 	// The cluster's platform: Kubernetes, Consul, Eureka, CloudFoundry
 	ClusterPlatform = "config.istio.io/platform"
 
@@ -44,26 +40,21 @@ const (
 	// E.g., on kubenetes, this file can be usually copied from .kube/config
 	ClusterAccessConfigSecret          = "config.istio.io/accessConfigSecret"
 	ClusterAccessConfigSecretNamespace = "config.istio.io/accessConfigSecretNamespace"
-
-	// For the time being, assume that ClusterPilotCfgStore is only set for one cluster only.
-	// If set to be true, this cluster will be used as the pilot's config store.
-	ClusterPilotCfgStore = "config.istio.io/pilotCfgStore"
 )
 
 // ClusterStore is a collection of clusters
 type ClusterStore struct {
 	clusters      []*k8s_cr.Cluster
-	cfgStore      *k8s_cr.Cluster
 	clientConfigs map[string]clientcmdapi.Config
+	storeLock     sync.RWMutex
 }
 
-// GetPilotAccessConfig returns this pilot's access config file name
-func (cs *ClusterStore) GetPilotAccessConfig() *clientcmdapi.Config {
-	if cs.cfgStore == nil {
-		return nil
+// NewClustersStore initializes data struct to store clusters information
+func NewClustersStore() *ClusterStore {
+	return &ClusterStore{
+		clusters:      []*k8s_cr.Cluster{},
+		clientConfigs: map[string]clientcmdapi.Config{},
 	}
-	pilotAccessConfig := cs.clientConfigs[cs.cfgStore.ObjectMeta.Name]
-	return &pilotAccessConfig
 }
 
 // GetClientAccessConfigs returns map of collected client configs
@@ -80,8 +71,8 @@ func (cs *ClusterStore) GetClusterAccessConfig(cluster *k8s_cr.Cluster) *clientc
 	return &clusterAccessConfig
 }
 
-// GetClusterName returns a cluster's name
-func GetClusterName(cluster *k8s_cr.Cluster) string {
+// GetClusterID returns a cluster's ID
+func GetClusterID(cluster *k8s_cr.Cluster) string {
 	if cluster == nil {
 		return ""
 	}
@@ -89,106 +80,121 @@ func GetClusterName(cluster *k8s_cr.Cluster) string {
 }
 
 // GetPilotClusters return a list of clusters under this pilot, exclude PilotCfgStore
-func (cs *ClusterStore) GetPilotClusters() (clusters []*k8s_cr.Cluster) {
-	if cs.cfgStore != nil {
-		pilotEndpoint := cs.cfgStore.ObjectMeta.Annotations[ClusterPilotEndpoint]
-		for _, cluster := range cs.clusters {
-			if cluster.ObjectMeta.Annotations[ClusterPilotEndpoint] == pilotEndpoint {
-				clusters = append(clusters, cluster)
-			}
-		}
-	}
-	return
+func (cs *ClusterStore) GetPilotClusters() []*k8s_cr.Cluster {
+	return cs.clusters
 }
 
-func setCfgStore(cs *ClusterStore) error {
-	for _, cluster := range cs.clusters {
-		log.Infof("Name: %s, ClusterPilotCfgStore: %s", cluster.ObjectMeta.Name, cluster.ObjectMeta.Annotations[ClusterPilotCfgStore])
-		if isCfgStore, _ := strconv.ParseBool(cluster.ObjectMeta.Annotations[ClusterPilotCfgStore]); isCfgStore {
-			if cs.cfgStore != nil {
-				return fmt.Errorf("multiple cluster config stores are defined")
-			}
-			cs.cfgStore = cluster
-		}
-	}
-	if cs.cfgStore == nil {
-		return fmt.Errorf("no config store is defined in the cluster registries")
+// ReadClustersV2 reads multiple clusters based upon the label istio/multiCluster
+func ReadClustersV2(k8s kubernetes.Interface, cs *ClusterStore, podNameSpace string) (errList error) {
+	err := getClustersConfigsV2(k8s, cs, podNameSpace)
+	if err != nil {
+		// Errors were encountered, but cluster store was populated
+		log.Errorf("The following errors were encountered during multicluster label processing: [ %v ]",
+			err)
 	}
 
 	return nil
 }
 
-// ReadClusters reads multiple clusters from a ConfigMap
-func ReadClusters(k8s kubernetes.Interface, configMapName string, configMapNamespace string) (*ClusterStore, error) {
+// getClustersConfigsV2 reads mutiple clusters from secrets with labels
+func getClustersConfigsV2(k8s kubernetes.Interface, cs *ClusterStore, podNameSpace string) (errList error) {
+	clusterSecrets, err := k8s.CoreV1().Secrets(podNameSpace).List(metav1.ListOptions{
+		LabelSelector: mcLabel,
+	})
 
-	// getClustersConfigs
-	cs, err := getClustersConfigs(k8s, configMapName, configMapNamespace)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if len(cs.clusters) == 0 {
-		return nil, fmt.Errorf("no kubeconf found in provided ConfigMap: %s/%s", configMapNamespace, configMapName)
-	}
-	if err := setCfgStore(cs); err != nil {
-		log.Errorf("%s", err.Error())
-		return nil, err
+	for _, secret := range clusterSecrets.Items {
+		cluster := k8s_cr.Cluster{}
+		kubeconfig, ok := secret.Data[secret.ObjectMeta.Name]
+		if !ok {
+			errList = multierror.Append(errList, fmt.Errorf("could not read secret %s error %v", secret.ObjectMeta.Name, err))
+			continue
+		}
+		clientConfig, err := clientcmd.Load(kubeconfig)
+		if err != nil {
+			errList = multierror.Append(errList, fmt.Errorf("could not load kubeconfig for secret %s error %v", secret.ObjectMeta.Name, err))
+			continue
+		}
+
+		cs.clientConfigs[secret.ObjectMeta.Name] = *clientConfig
+		cluster.ObjectMeta.Name = secret.ObjectMeta.Name
+		cs.clusters = append(cs.clusters, &cluster)
 	}
 
-	return cs, nil
+	return
+}
+
+// ReadClusters reads multiple clusters from a ConfigMap
+func ReadClusters(k8s kubernetes.Interface, configMapName string,
+	configMapNamespace string, cs *ClusterStore) error {
+
+	// getClustersConfigs populates Cluster Store with valid entries found in
+	// the configmap. Partial success is possible when some entries in the configmap
+	// are valid and some not.
+	err := getClustersConfigs(k8s, configMapName, configMapNamespace, cs)
+	if err != nil {
+		// Errors were encountered, but cluster store was populated
+		log.Errorf("The following errors were encountered during processing of the configmap %s/%s, [ %v ]",
+			configMapNamespace, configMapName, err)
+
+	}
+
+	// ALways return nil because Cluster Store has been already initialized and populating it
+	// at start up is NOT required, it can be populated at runtime
+	return nil
 }
 
 // getClustersConfigs(configMapName,configMapNamespace)
-func getClustersConfigs(k8s kubernetes.Interface, configMapName, configMapNamespace string) (*ClusterStore, error) {
-	cs := &ClusterStore{
-		clusters:      []*k8s_cr.Cluster{},
-		cfgStore:      nil,
-		clientConfigs: map[string]clientcmdapi.Config{},
-	}
+func getClustersConfigs(k8s kubernetes.Interface, configMapName, configMapNamespace string, cs *ClusterStore) (errList error) {
 
 	clusterRegistry, err := k8s.CoreV1().ConfigMaps(configMapNamespace).Get(configMapName, metav1.GetOptions{})
 	if err != nil {
-		return &ClusterStore{}, err
+		return err
 	}
 
 	for key, data := range clusterRegistry.Data {
 		cluster := k8s_cr.Cluster{}
 		decoder := yaml.NewYAMLOrJSONDecoder(strings.NewReader(data), 4096)
 		if err = decoder.Decode(&cluster); err != nil {
-			log.Errorf("failed to decode cluster definition for: %s error: %v", key, err)
-			return &ClusterStore{}, err
+			errList = multierror.Append(errList, fmt.Errorf("failed to decode cluster definition for: %s error: %v", key, err))
+			continue
 		}
 		if err := validateCluster(&cluster); err != nil {
-			log.Errorf("failed to validate cluster: %s error: %v", key, err)
-			return &ClusterStore{}, err
+			errList = multierror.Append(errList, fmt.Errorf("failed to validate cluster: %s error: %v", key, err))
+			continue
 		}
 		secretName := cluster.ObjectMeta.Annotations[ClusterAccessConfigSecret]
 		secretNamespace := cluster.ObjectMeta.Annotations[ClusterAccessConfigSecretNamespace]
 		if len(secretName) == 0 {
-			log.Errorf("cluster %s does not have annotation for Secret", key)
-			return &ClusterStore{}, nil
+			errList = multierror.Append(errList, fmt.Errorf("cluster %s does not have annotation for Secret", key))
+			continue
+
 		}
 		if len(secretNamespace) == 0 {
 			secretNamespace = "istio-system"
 		}
 		kubeconfig, err := getClusterConfigFromSecret(k8s, secretName, secretNamespace, key)
 		if err != nil {
-			log.Errorf("failed to get Secret %s in namespace %s for cluster %s with error: %v",
-				secretName, secretNamespace, key, err)
-			return &ClusterStore{}, nil
+			errList = multierror.Append(errList, fmt.Errorf("failed to get Secret %s in namespace %s for cluster %s with error: %v",
+				secretName, secretNamespace, key, err))
+			continue
 		}
 		clientConfig, err := clientcmd.Load(kubeconfig)
 		if err != nil {
-			log.Errorf("failed to load client config from secret %s in namespace %s for cluster %s with error: %v",
-				secretName, secretNamespace, key, err)
-			return &ClusterStore{}, nil
+			errList = multierror.Append(errList, fmt.Errorf("failed to load client config from secret %s in namespace %s for cluster %s with error: %v",
+				secretName, secretNamespace, key, err))
+			continue
 		}
 		cs.clientConfigs[cluster.ObjectMeta.Name] = *clientConfig
 		cs.clusters = append(cs.clusters, &cluster)
 	}
 
-	return cs, nil
+	return
 }
 
+// Read a kubeconfig fragment from the secret.
 func getClusterConfigFromSecret(k8s kubernetes.Interface,
 	secretName string,
 	secretNamespace string,
@@ -211,34 +217,31 @@ func getClusterConfigFromSecret(k8s kubernetes.Interface,
 // validateCluster validate a cluster
 func validateCluster(cluster *k8s_cr.Cluster) (err error) {
 	if cluster.TypeMeta.Kind != "Cluster" {
-		err = multierr.Append(err, fmt.Errorf("bad kind in configuration: `%s` != 'Cluster'", cluster.TypeMeta.Kind))
+		err = multierror.Append(err, fmt.Errorf("bad kind in configuration: `%s` != 'Cluster'", cluster.TypeMeta.Kind))
 	}
-
-	if cluster.ObjectMeta.Annotations[ClusterPilotEndpoint] == "" {
-		err = multierror.Append(err, fmt.Errorf("cluster %s doesn't have a valid pilot endpoint", cluster.ObjectMeta.Name))
-	}
-
-	switch serviceregistry.ServiceRegistry(cluster.ObjectMeta.Annotations[ClusterPlatform]) {
-	case serviceregistry.KubernetesRegistry:
-	case serviceregistry.ConsulRegistry:
-	case serviceregistry.EurekaRegistry:
-	case serviceregistry.CloudFoundryRegistry:
-	default:
-		err = multierror.Append(err, fmt.Errorf("cluster %s has unsupported platform %s",
-			cluster.ObjectMeta.Name, cluster.ObjectMeta.Annotations[ClusterPlatform]))
-	}
-
-	if cluster.ObjectMeta.Annotations[ClusterPilotCfgStore] != "" {
-		if _, err1 := strconv.ParseBool(cluster.ObjectMeta.Annotations[ClusterPilotCfgStore]); err1 != nil {
-			err = multierror.Append(err, err1)
+	// Default is k8s.
+	if len(cluster.ObjectMeta.Annotations[ClusterPlatform]) > 0 {
+		switch serviceregistry.ServiceRegistry(cluster.ObjectMeta.Annotations[ClusterPlatform]) {
+		// Currently only supporting kubernetes registry,
+		case serviceregistry.KubernetesRegistry:
+		case serviceregistry.ConsulRegistry:
+			fallthrough
+		case serviceregistry.EurekaRegistry:
+			fallthrough
+		case serviceregistry.CloudFoundryRegistry:
+			fallthrough
+		default:
+			err = multierror.Append(err, fmt.Errorf("cluster %s has unsupported platform %s",
+				cluster.ObjectMeta.Name, cluster.ObjectMeta.Annotations[ClusterPlatform]))
 		}
 	}
+
 	if cluster.ObjectMeta.Annotations[ClusterAccessConfigSecret] == "" {
-		err = multierror.Append(err, fmt.Errorf("cluster %s doesn't have a valid config secret", cluster.ObjectMeta.Name))
-	} else {
-		if cluster.ObjectMeta.Annotations[ClusterAccessConfigSecretNamespace] == "" {
-			cluster.ObjectMeta.Annotations[ClusterAccessConfigSecretNamespace] = "istio-system"
-		}
+		// by default, expect a secret with the same name as the cluster
+		cluster.ObjectMeta.Annotations[ClusterAccessConfigSecretNamespace] = cluster.Name
+	}
+	if cluster.ObjectMeta.Annotations[ClusterAccessConfigSecretNamespace] == "" {
+		cluster.ObjectMeta.Annotations[ClusterAccessConfigSecretNamespace] = "istio-system"
 	}
 
 	return

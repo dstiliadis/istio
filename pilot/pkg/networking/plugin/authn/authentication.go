@@ -119,7 +119,7 @@ func OutputLocationForJwtIssuer(issuer string) string {
 }
 
 // ConvertPolicyToJwtConfig converts policy into Jwt filter config for envoy.
-func ConvertPolicyToJwtConfig(policy *authn.Policy) *jwtfilter.JwtAuthentication {
+func ConvertPolicyToJwtConfig(policy *authn.Policy, useInlinePublicKey bool) *jwtfilter.JwtAuthentication {
 	policyJwts := CollectJwtSpecs(policy)
 	if len(policyJwts) == 0 {
 		return nil
@@ -128,16 +128,41 @@ func ConvertPolicyToJwtConfig(policy *authn.Policy) *jwtfilter.JwtAuthentication
 		AllowMissingOrFailed: true,
 	}
 	for _, policyJwt := range policyJwts {
-		hostname, port, _, err := model.ParseJwksURI(policyJwt.JwksUri)
-		if err != nil {
-			log.Errorf("Cannot parse jwks_uri %q: %v", policyJwt.JwksUri, err)
-			continue
+		jwt := &jwtfilter.JwtRule{
+			Issuer:               policyJwt.Issuer,
+			Audiences:            policyJwt.Audiences,
+			ForwardPayloadHeader: OutputLocationForJwtIssuer(policyJwt.Issuer),
+			Forward:              true,
 		}
 
-		jwt := &jwtfilter.JwtRule{
-			Issuer:    policyJwt.Issuer,
-			Audiences: policyJwt.Audiences,
-			JwksSourceSpecifier: &jwtfilter.JwtRule_RemoteJwks{
+		for _, location := range policyJwt.JwtHeaders {
+			jwt.FromHeaders = append(jwt.FromHeaders, &jwtfilter.JwtHeader{
+				Name: location,
+			})
+		}
+		jwt.FromParams = policyJwt.JwtParams
+
+		if useInlinePublicKey {
+			jwtPubKey, err := model.JwtKeyResolver.GetPublicKey(policyJwt.JwksUri)
+			if err != nil {
+				log.Warnf("Failed to fetch jwt public key from %q", policyJwt.JwksUri)
+			}
+
+			// Put empty string in config even if above ResolveJwtPubKey fails.
+			jwt.JwksSourceSpecifier = &jwtfilter.JwtRule_LocalJwks{
+				LocalJwks: &core.DataSource{
+					Specifier: &core.DataSource_InlineString{
+						InlineString: jwtPubKey,
+					},
+				},
+			}
+		} else {
+			hostname, port, _, err := model.ParseJwksURI(policyJwt.JwksUri)
+			if err != nil {
+				log.Warnf("Cannot parse jwks_uri %q: %v", policyJwt.JwksUri, err)
+			}
+
+			jwt.JwksSourceSpecifier = &jwtfilter.JwtRule_RemoteJwks{
 				RemoteJwks: &jwtfilter.RemoteJwks{
 					HttpUri: &core.HttpUri{
 						Uri: policyJwt.JwksUri,
@@ -147,16 +172,9 @@ func ConvertPolicyToJwtConfig(policy *authn.Policy) *jwtfilter.JwtAuthentication
 					},
 					CacheDuration: &types.Duration{Seconds: jwtPublicKeyCacheSeconds},
 				},
-			},
-			ForwardPayloadHeader: OutputLocationForJwtIssuer(policyJwt.Issuer),
-			Forward:              false,
+			}
 		}
-		for _, location := range policyJwt.JwtHeaders {
-			jwt.FromHeaders = append(jwt.FromHeaders, &jwtfilter.JwtHeader{
-				Name: location,
-			})
-		}
-		jwt.FromParams = policyJwt.JwtParams
+
 		ret.Rules = append(ret.Rules, jwt)
 	}
 	return ret
@@ -194,7 +212,8 @@ func ConvertPolicyToAuthNFilterConfig(policy *authn.Policy) *authn_filter.Filter
 
 // BuildJwtFilter returns a Jwt filter for all Jwt specs in the policy.
 func BuildJwtFilter(policy *authn.Policy) *http_conn.HttpFilter {
-	filterConfigProto := ConvertPolicyToJwtConfig(policy)
+	// v2 api will use inline public key.
+	filterConfigProto := ConvertPolicyToJwtConfig(policy, true /*useInlinePublicKey*/)
 	if filterConfigProto == nil {
 		return nil
 	}
@@ -234,12 +253,12 @@ func buildSidecarListenerTLSContext(authenticationPolicy *authn.Policy) *auth.Do
 					{
 						CertificateChain: &core.DataSource{
 							Specifier: &core.DataSource_Filename{
-								Filename: model.CertChainFilename,
+								Filename: model.AuthCertsPath + model.CertChainFilename,
 							},
 						},
 						PrivateKey: &core.DataSource{
 							Specifier: &core.DataSource_Filename{
-								Filename: model.KeyFilename,
+								Filename: model.AuthCertsPath + model.KeyFilename,
 							},
 						},
 					},
@@ -247,7 +266,7 @@ func buildSidecarListenerTLSContext(authenticationPolicy *authn.Policy) *auth.Do
 				ValidationContext: &auth.CertificateValidationContext{
 					TrustedCa: &core.DataSource{
 						Specifier: &core.DataSource_Filename{
-							Filename: model.RootCertFilename,
+							Filename: model.AuthCertsPath + model.RootCertFilename,
 						},
 					},
 				},
@@ -280,17 +299,21 @@ func (Plugin) OnInboundListener(in *plugin.InputParams, mutable *plugin.MutableO
 	authnPolicy := model.GetConsolidateAuthenticationPolicy(
 		in.Env.Mesh, in.Env.IstioConfigStore, in.ServiceInstance.Service.Hostname, in.ServiceInstance.Endpoint.ServicePort)
 
-	if mutable.Listener == nil || len(mutable.Listener.FilterChains) != 1 {
-		return fmt.Errorf("expect lister has exactly one filter chain")
+	if mutable.Listener == nil || (len(mutable.Listener.FilterChains) != len(mutable.FilterChains)) {
+		return fmt.Errorf("expected same number of filter chains in listener (%d) and mutable (%d)", len(mutable.Listener.FilterChains), len(mutable.FilterChains))
 	}
-	mutable.Listener.FilterChains[0].TlsContext = buildSidecarListenerTLSContext(authnPolicy)
 
-	// Adding Jwt filter and authn filter, if needed.
-	if filter := BuildJwtFilter(authnPolicy); filter != nil {
-		mutable.HTTPFilters = append(mutable.HTTPFilters, filter)
-	}
-	if filter := BuildAuthNFilter(authnPolicy); filter != nil {
-		mutable.HTTPFilters = append(mutable.HTTPFilters, filter)
+	for i := range mutable.Listener.FilterChains {
+		mutable.Listener.FilterChains[i].TlsContext = buildSidecarListenerTLSContext(authnPolicy)
+		if in.ListenerType == plugin.ListenerTypeHTTP {
+			// Adding Jwt filter and authn filter, if needed.
+			if filter := BuildJwtFilter(authnPolicy); filter != nil {
+				mutable.FilterChains[i].HTTP = append(mutable.FilterChains[i].HTTP, filter)
+			}
+			if filter := BuildAuthNFilter(authnPolicy); filter != nil {
+				mutable.FilterChains[i].HTTP = append(mutable.FilterChains[i].HTTP, filter)
+			}
+		}
 	}
 	return nil
 }

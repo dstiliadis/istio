@@ -180,7 +180,7 @@ where-is-docker-tar:
 #-----------------------------------------------------------------------------
 # Target: depend
 #-----------------------------------------------------------------------------
-.PHONY: depend depend.status depend.update depend.cleanlock depend.update.full init
+.PHONY: depend depend.diff init
 
 # Parse out the x.y or x.y.z version and output a single value x*10000+y*100+z (e.g., 1.9 is 10900)
 # that allows the three components to be checked in a single comparison.
@@ -203,27 +203,7 @@ check-tree:
        exit 1; fi
 
 # Downloads envoy, based on the SHA defined in the base pilot Dockerfile
-# Will also check vendor, based on Gopkg.lock
-init: check-tree submodule vendor.check check-go-version $(ISTIO_OUT)/istio_is_init
-
-# Marker for whether vendor submodule is here or not already
-GRPC_DIR:=./vendor/google.golang.org/grpc
-
-# Submodule handling when not already there
-submodule: $(GRPC_DIR)
-
-$(GRPC_DIR):
-	$(MAKE) submodule-sync
-
-# If you want to force update/sync, invoke 'make submodule-sync' directly
-submodule-sync:
-	git submodule sync
-	git submodule update --init
-
-# Short cut for pulling/updating to latest of the current branch
-pull:
-	git pull
-	$(MAKE) submodule-sync
+init: check-tree check-go-version $(ISTIO_OUT)/istio_is_init
 
 # Merge master. To be used in CI or by developers, assumes the
 # remote is called 'origin' (git default). Will fail on conflicts
@@ -234,10 +214,8 @@ git.pullmaster:
 
 # Sync target will pull from master and sync the modules. It is the first step of the
 # circleCI build, developers should call it periodically.
-sync: git.pullmaster submodule-sync init
+sync: git.pullmaster init
 	mkdir -p ${OUT_DIR}/logs
-
-.PHONY: submodule pull submodule-sync git.pullmaster
 
 # I tried to make this dependent on what I thought was the appropriate
 # lock file, but it caused the rule for that file to get run (which
@@ -252,40 +230,17 @@ ${ISTIO_ENVOY_DEBUG_PATH}: init
 ${ISTIO_ENVOY_RELEASE_PATH}: init
 
 # Pull depdendencies, based on the checked in Gopkg.lock file.
-# Developers must manually call make depend.update if adding new deps or
-# make pull to pull recent changes in the submodule.
+# Developers must manually run `dep ensure` if adding new deps
 depend: init | $(ISTIO_OUT)
 
 $(ISTIO_OUT) $(ISTIO_BIN):
 	@mkdir -p $@
 
-depend.status: | $(ISTIO_OUT)
-	@echo "No error means your Gopkg.* are in sync and ok with vendor/"
-	dep status -dot > $(ISTIO_OUT)/dep.dot
-	cp Gopkg.* vendor/
-
-$(ISTIO_OUT)/dep.png: $(ISTIO_OUT)/dep.dot
-	dot -T png < $(ISTIO_OUT)/dep.dot > $(ISTIO_OUT)/dep.png
-
-# https://github.com/istio/istio/wiki/Vendor-FAQ#how-do-i-add--change-a-dependency
-depend.update.full: depend.cleanlock depend.update
-
-depend.cleanlock:
-	-rm Gopkg.lock
-
-depend.update:
-	@echo "Running dep ensure with DEPARGS=$(DEPARGS)"
-	time dep ensure $(DEPARGS)
-	cp Gopkg.* vendor/
-	@echo "now check the diff in vendor/ and make a PR"
-
-vendor.check:
-	@echo "Checking that Gopkg.* are in sync with vendor/ submodule:"
-	@echo "if this fails, 'make pull' and/or seek on-call help"
-	diff Gopkg.toml vendor/
-	diff Gopkg.lock vendor/
-
-.PHONY: vendor.check
+# Used by CI to update the dependencies and generates a git diff of the vendor files against HEAD.
+depend.diff: $(ISTIO_OUT)
+	go get -u github.com/golang/dep/cmd/dep
+	dep ensure
+	git diff HEAD --exit-code -- Gopkg.lock vendor > $(ISTIO_OUT)/dep.diff
 
 ${GEN_CERT}:
 	GOOS=$(GOOS_LOCAL) && GOARCH=$(GOARCH_LOCAL) && CGO_ENABLED=1 bin/gobuild.sh $@ istio.io/istio/pkg/version ./security/cmd/generate_cert
@@ -408,7 +363,6 @@ istioctl-all: ${ISTIO_OUT}/istioctl-linux ${ISTIO_OUT}/istioctl-osx ${ISTIO_OUT}
 istio-archive: ${ISTIO_OUT}/archive
 
 # TBD: how to capture VERSION, ISTIO_DOCKER_HUB, ISTIO_URL as dependencies
-# consider using -a with updateVersion.sh to simplify the input parameters
 ${ISTIO_OUT}/archive: istioctl-all LICENSE README.md install/updateVersion.sh release/create_release_archives.sh
 	rm -rf ${ISTIO_OUT}/archive
 	mkdir -p ${ISTIO_OUT}/archive/istioctl
@@ -444,7 +398,7 @@ JUNIT_UNIT_TEST_XML ?= $(ISTIO_OUT)/junit_unit-tests.xml
 test: | $(JUNIT_REPORT)
 	mkdir -p $(dir $(JUNIT_UNIT_TEST_XML))
 	set -o pipefail; \
-	$(MAKE) --keep-going common-test pilot-test mixer-test security-test broker-test galley-test \
+	$(MAKE) --keep-going common-test pilot-test mixer-test security-test broker-test galley-test istioctl-test \
 	2>&1 | tee >($(JUNIT_REPORT) > $(JUNIT_UNIT_TEST_XML))
 
 GOTEST_PARALLEL ?= '-test.parallel=4'
@@ -471,6 +425,10 @@ localTestEnvCleanup: test-bins
 .PHONY: pilot-test
 pilot-test: pilot-agent
 	go test -p 1 ${T} ./pilot/...
+
+.PHONY: istioctl-test
+istioctl-test: istioctl
+	go test -p 1 ${T} ./istioctl/...
 
 .PHONY: mixer-test
 MIXER_TEST_T ?= ${T} ${GOTEST_PARALLEL}
@@ -502,11 +460,15 @@ common-test:
 .PHONY: coverage
 
 # Run coverage tests
-coverage: pilot-coverage mixer-coverage security-coverage broker-coverage galley-coverage common-coverage
+coverage: pilot-coverage mixer-coverage security-coverage broker-coverage galley-coverage common-coverage istioctl-coverage
 
 .PHONY: pilot-coverage
 pilot-coverage:
 	bin/codecov.sh pilot
+
+.PHONY: istioctl-coverage
+istioctl-coverage:
+	bin/codecov.sh istioctl
 
 .PHONY: mixer-coverage
 mixer-coverage:
@@ -536,11 +498,15 @@ common-coverage:
 .PHONY: racetest
 
 # Run race tests
-racetest: pilot-racetest mixer-racetest security-racetest broker-racetest galley-test common-racetest
+racetest: pilot-racetest mixer-racetest security-racetest broker-racetest galley-test common-racetest istioctl-racetest
 
 .PHONY: pilot-racetest
 pilot-racetest: pilot-agent
 	RACE_TEST=true go test -p 1 ${T} -race ./pilot/...
+
+.PHONY: istioctl-racetest
+istioctl-racetest: istioctl
+	RACE_TEST=true go test -p 1 ${T} -race ./istioctl/...
 
 .PHONY: mixer-racetest
 mixer-racetest: mixs
@@ -616,8 +582,6 @@ $(HELM):
 istio-remote.yaml: $(HELM)
 	cat install/kubernetes/templates/namespace.yaml > install/kubernetes/$@
 	$(HELM) template --namespace=istio-system \
-		  --set global.pilotIp="pilotIpReplace" \
-		  --set global.mixerIp="mixerIpReplace" \
 		  install/kubernetes/helm/istio-remote >> install/kubernetes/$@
 
 # creates istio.yaml istio-auth.yaml istio-one-namespace.yaml istio-one-namespace-auth.yaml
@@ -641,6 +605,19 @@ generate_yaml-envoyv2_transition: $(HELM)
 		  --values install/kubernetes/helm/istio/values-envoyv2-transition.yaml \
 		  install/kubernetes/helm/istio >> install/kubernetes/istio.yaml
 
+# This is temporary. REMOVE ME after Envoy v2 transition
+# creates istio.yaml using values-envoyv2-transition.yaml
+generate_yaml-envoyv2_transition_loadbalancer_ingressgateway: $(HELM)
+	./install/updateVersion_orig.sh -a ${HUB},${TAG} >/dev/null 2>&1
+	cat install/kubernetes/templates/namespace.yaml > install/kubernetes/istio.yaml
+	$(HELM) template --set global.tag=${TAG} \
+		  --namespace=istio-system \
+                  --set global.hub=${HUB} \
+		  --values install/kubernetes/helm/istio/values-envoyv2-transition.yaml \
+                  --set ingressgateway.service.type=LoadBalancer \
+		  --set ingress.enabled=false \
+		  install/kubernetes/helm/istio >> install/kubernetes/istio.yaml
+
 deploy/all: $(HELM) istio-all.yaml
 	kubectl apply -n istio-system -f install/kubernetes/istio-all.yaml
 
@@ -652,19 +629,16 @@ generate_yaml_new:
 	(cd install/kubernetes/helm/istio; ${ISTIO_OUT}/istioctl gen-deploy -o yaml --values values.yaml)
 
 
-# files genarated by the default invocation of updateVersion.sh
+# files generated by the default invocation of updateVersion.sh
 FILES_TO_CLEAN+=install/consul/istio.yaml \
                 install/eureka/istio.yaml \
                 install/kubernetes/addons/grafana.yaml \
-                install/kubernetes/addons/prometheus.yaml \
                 install/kubernetes/addons/servicegraph.yaml \
                 install/kubernetes/addons/zipkin-to-stackdriver.yaml \
                 install/kubernetes/addons/zipkin.yaml \
                 install/kubernetes/istio-auth.yaml \
                 install/kubernetes/istio-citadel-plugin-certs.yaml \
                 install/kubernetes/istio-citadel-with-health-check.yaml \
-                install/kubernetes/istio-mixer-validator.yaml \
-                install/kubernetes/istio-mixer-with-health-check.yaml \
                 install/kubernetes/istio-one-namespace-auth.yaml \
                 install/kubernetes/istio-one-namespace.yaml \
                 install/kubernetes/istio.yaml \

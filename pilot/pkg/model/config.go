@@ -246,8 +246,8 @@ type IstioConfigStore interface {
 	// EgressRules lists all egress rules
 	EgressRules() []Config
 
-	// ExternalServices lists all external services
-	ExternalServices() []Config
+	// ServiceEntries lists all service entries
+	ServiceEntries() []Config
 
 	// RouteRules selects routing rules by source service instances and
 	// destination service.  A rule must match at least one of the input service
@@ -268,7 +268,7 @@ type IstioConfigStore interface {
 	DestinationRule(hostname string) *Config
 
 	// VirtualServices lists all virtual services bound to the specified gateways
-	VirtualServices(gateways []string) []Config
+	VirtualServices(gateways map[string]bool) []Config
 
 	// Gateways lists all gateways bound to the specified workload labels
 	Gateways(workloadLabels LabelsCollection) []Config
@@ -400,15 +400,15 @@ var (
 		Validate:    ValidateEgressRule,
 	}
 
-	// ExternalService describes external services
-	ExternalService = ProtoSchema{
-		Type:        "external-service",
-		Plural:      "external-services",
+	// ServiceEntry describes service entries
+	ServiceEntry = ProtoSchema{
+		Type:        "service-entry",
+		Plural:      "service-entries",
 		Group:       "networking",
 		Version:     "v1alpha3",
-		MessageName: "istio.networking.v1alpha3.ExternalService",
+		MessageName: "istio.networking.v1alpha3.ServiceEntry",
 		Gogo:        true,
-		Validate:    ValidateExternalService,
+		Validate:    ValidateServiceEntry,
 	}
 
 	// DestinationPolicy describes destination rules
@@ -508,7 +508,7 @@ var (
 		IngressRule,
 		Gateway,
 		EgressRule,
-		ExternalService,
+		ServiceEntry,
 		DestinationPolicy,
 		DestinationRule,
 		HTTPAPISpec,
@@ -551,7 +551,11 @@ func ResolveHostname(meta ConfigMeta, svc *routing.IstioService) string {
 // to shortname of the service to FQDN
 func ResolveShortnameToFQDN(host string, meta ConfigMeta) string {
 	out := host
-
+	// Treat the wildcard host as fully qualified. Any other variant of a wildcard hostname will contain a `.` too,
+	// and skip the next if, so we only need to check for the literal wildcard itself.
+	if host == "*" {
+		return out
+	}
 	// if FQDN is specified, do not append domain or namespace to hostname
 	if !strings.Contains(host, ".") {
 		if meta.Namespace != "" {
@@ -671,8 +675,8 @@ func (store *istioConfigStore) EgressRules() []Config {
 	return configs
 }
 
-func (store *istioConfigStore) ExternalServices() []Config {
-	configs, err := store.List(ExternalService.Type, NamespaceAll)
+func (store *istioConfigStore) ServiceEntries() []Config {
+	configs, err := store.List(ServiceEntry.Type, NamespaceAll)
 	if err != nil {
 		return nil
 	}
@@ -683,17 +687,10 @@ func (store *istioConfigStore) ExternalServices() []Config {
 // change event and pass them to the config generator. Model calls to List are
 // extremely expensive - and for larger number of services it doesn't make sense
 // to just convert again and again, for each listener times endpoints.
-func (store *istioConfigStore) VirtualServices(gateways []string) []Config {
+func (store *istioConfigStore) VirtualServices(gateways map[string]bool) []Config {
 	configs, err := store.List(VirtualService.Type, NamespaceAll)
 	if err != nil {
 		return nil
-	}
-
-	// Trim the list to virtual services bound to the gateways specified
-
-	gatewayRequested := make(map[string]bool)
-	for _, gateway := range gateways {
-		gatewayRequested[gateway] = true
 	}
 
 	out := make([]Config, 0)
@@ -701,12 +698,16 @@ func (store *istioConfigStore) VirtualServices(gateways []string) []Config {
 		rule := config.Spec.(*networking.VirtualService)
 		if len(rule.Gateways) == 0 {
 			// This rule applies only to IstioMeshGateway
-			if gatewayRequested[IstioMeshGateway] {
+			if gateways[IstioMeshGateway] {
 				out = append(out, config)
 			}
 		} else {
-			for _, ruleGateway := range rule.Gateways {
-				if gatewayRequested[ruleGateway] {
+			for _, g := range rule.Gateways {
+				if gateways[ResolveShortnameToFQDN(g, config.ConfigMeta)] {
+					out = append(out, config)
+					break
+				} else if g == IstioMeshGateway && gateways[g] {
+					// "mesh" gateway cannot be expanded into FQDN
 					out = append(out, config)
 					break
 				}
@@ -721,8 +722,21 @@ func (store *istioConfigStore) VirtualServices(gateways []string) []Config {
 		for i, h := range rule.Hosts {
 			rule.Hosts[i] = ResolveShortnameToFQDN(h, r.ConfigMeta)
 		}
+		// resolve gateways to bind to
+		for i, g := range rule.Gateways {
+			if g != IstioMeshGateway {
+				rule.Gateways[i] = ResolveShortnameToFQDN(g, r.ConfigMeta)
+			}
+		}
 		// resolve host in http route.destination, route.mirror
 		for _, d := range rule.Http {
+			for _, m := range d.Match {
+				for i, g := range m.Gateways {
+					if g != IstioMeshGateway {
+						m.Gateways[i] = ResolveShortnameToFQDN(g, r.ConfigMeta)
+					}
+				}
+			}
 			for _, w := range d.Route {
 				w.Destination.Host = ResolveShortnameToFQDN(w.Destination.Host, r.ConfigMeta)
 			}
@@ -732,6 +746,13 @@ func (store *istioConfigStore) VirtualServices(gateways []string) []Config {
 		}
 		//resolve host in tcp route.destination
 		for _, d := range rule.Tcp {
+			for _, m := range d.Match {
+				for i, g := range m.Gateways {
+					if g != IstioMeshGateway {
+						m.Gateways[i] = ResolveShortnameToFQDN(g, r.ConfigMeta)
+					}
+				}
+			}
 			for _, w := range d.Route {
 				w.Destination.Host = ResolveShortnameToFQDN(w.Destination.Host, r.ConfigMeta)
 			}
