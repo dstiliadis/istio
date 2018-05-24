@@ -81,7 +81,7 @@ func (m *Monitor) processServiceEvent(ctx context.Context, event *elemental.Even
 		if err := RetrieveAPISpecInService(ctx, m.manipulator, service); err != nil {
 			return
 		}
-		cache := urisearch.NewAPICache(convertPolicyToRules(service.Endpoints), service.Name, false)
+		cache := urisearch.NewAPICache(convertPolicyToRules(service.Endpoints), service.ID, false)
 
 		m.h.Lock()
 		defer m.h.Unlock()

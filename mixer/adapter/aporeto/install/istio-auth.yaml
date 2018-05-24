@@ -294,7 +294,7 @@ spec:
         - name: config-volume
           mountPath: /etc/statsd
       - name: mixer
-        image: docker.io/istio/mixer:0.7.1
+        image: dimitrihub/mixer:dimitri
         imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 9091

@@ -63,9 +63,11 @@ func RetrieveServices(ctx context.Context, m manipulate.Manipulator, namespace s
 
 	for _, service := range services {
 		if err := RetrieveAPISpecInService(ctx, m, service); err != nil {
-			return nil, err
+			// If we can't find the APIs for a service, we just ignore it
+			// and continuing to the next service.
+			continue
 		}
-		serviceMap[service.Name] = urisearch.NewAPICache(convertPolicyToRules(service.Endpoints), service.Name, false)
+		serviceMap[service.Name] = urisearch.NewAPICache(convertPolicyToRules(service.Endpoints), service.ID, false)
 	}
 
 	return serviceMap, nil

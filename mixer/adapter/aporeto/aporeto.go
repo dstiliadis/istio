@@ -19,6 +19,7 @@ import (
 	"github.com/aporeto-inc/manipulate"
 	"github.com/aporeto-inc/manipulate/maniphttp"
 	"github.com/aporeto-inc/tg/tglib"
+	"github.com/aporeto-inc/trireme-lib/policy"
 
 	mclient "github.com/aporeto-inc/midgard-lib/client"
 )
@@ -42,19 +43,22 @@ var _ authorization.Handler = &handler{}
 
 // adapter.HandlerBuilder#Build
 func (b *builder) Build(context context.Context, env adapter.Env) (adapter.Handler, error) {
-	env.Logger().Debugf("Building aporeto adapter")
-	cert, key, err := tglib.ReadCertificate([]byte(b.adpCfg.Certificate), []byte(b.adpCfg.Key), "aporeto")
+	env.Logger().Infof("Building aporeto adapter")
+	cert, key, err := tglib.ReadCertificate([]byte(b.adpCfg.GetCertificate()), []byte(b.adpCfg.GetKey()), "aporeto")
 	if err != nil {
 		return nil, fmt.Errorf("Invalid certificate")
 	}
-
 	tlsCert, err := tglib.ToTLSCertificate(cert, key)
 	if err != nil {
 		return nil, fmt.Errorf("Invalid TLS certificate or key")
 	}
-
-	rootCAPool := x509.NewCertPool()
-	rootCAPool.AppendCertsFromPEM([]byte(b.adpCfg.GetCa()))
+	rootCAPool, err := x509.SystemCertPool()
+	if err != nil || rootCAPool == nil {
+		rootCAPool = x509.NewCertPool()
+	}
+	if len(b.adpCfg.GetCa()) > 0 {
+		rootCAPool.AppendCertsFromPEM([]byte(b.adpCfg.GetCa()))
+	}
 
 	clientTLSConfig := &tls.Config{
 		RootCAs:      rootCAPool,
@@ -69,7 +73,7 @@ func (b *builder) Build(context context.Context, env adapter.Env) (adapter.Handl
 		mclient.NewMidgardTokenManager(b.adpCfg.Uri, time.Hour*1, clientTLSConfig),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("Cannot initiate connection to Aporeto")
+		return nil, fmt.Errorf("Cannot initiate connection to Aporeto service: %s", err)
 	}
 
 	serviceMap, err := RetrieveServices(context, m, b.adpCfg.Namespace)
@@ -86,7 +90,7 @@ func (b *builder) Build(context context.Context, env adapter.Env) (adapter.Handl
 	monitor := NewMonitor(m, b.h, b.adpCfg.Namespace)
 	env.ScheduleDaemon(func() { monitor.listen(context) })
 
-	env.Logger().Debugf("Succesfully build the Aporeto adapter")
+	env.Logger().Infof("Succesfully build the Aporeto adapter")
 	return b.h, nil
 }
 
@@ -108,9 +112,7 @@ func (b *builder) Validate() (ce *adapter.ConfigErrors) {
 func (h *handler) HandleAuthorization(ctx context.Context, insts *authorization.Instance) (adapter.CheckResult, error) {
 	h.RLock()
 	defer h.RUnlock()
-
 	labels := mapLabels(insts)
-	fmt.Println("HERE ARE MY LABELS ", labels)
 
 	cache, ok := h.serviceMap[insts.Action.Service]
 	if !ok {
@@ -121,12 +123,15 @@ func (h *handler) HandleAuthorization(ctx context.Context, insts *authorization.
 
 	found := cache.FindAndMatchScope(insts.Action.Method, insts.Action.Path, labels)
 	if !found {
+		// env schedule work here
+		collectFlow(ctx, h.manipulator, h.namespace, cache.ID, policy.Reject, insts.Action.Method, insts.Action.Path, insts)
 		return adapter.CheckResult{
 			Status: status.WithPermissionDenied("Authorization Rejected By Policy\n"),
 		}, nil
 	}
 
 	// Accepted
+	collectFlow(ctx, h.manipulator, h.namespace, cache.ID, policy.Accept, insts.Action.Method, insts.Action.Path, insts)
 	return adapter.CheckResult{Status: status.OK}, nil
 }
 

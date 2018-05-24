@@ -7,7 +7,7 @@ metadata:
   name: demoapp 
   namespace: apowine
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
       app: demoapp 
@@ -62,29 +62,57 @@ spec:
 apiVersion: extensions/v1beta1
 kind: ReplicaSet
 metadata:
-  name: demo-client 
+  name: internal-client 
   namespace: apowine
   labels:
     role: client
-    drink: wine
-    app: wine-getter
+    app: internal-client
     type: cli
 spec:
-  replicas: 1
+  replicas: 3
   selector:
     matchLabels:
-      app: wine-getter
+      app: internal-client
   template:
     metadata:
-      name: apowine-wine-getter
+      name: apowine-internal-client
       labels:
         role: client
-        app: wine-getter
+        app: internal-client
         type: cli
     spec:
       containers:
-          - name: client
+          - name: internal-client
             image: aporeto/apowine-clientcurl:latest
             env:
             - name: URI
               value: "demo.apowine.svc.cluster.local/internal"
+---
+apiVersion: extensions/v1beta1
+kind: ReplicaSet
+metadata:
+  name: admin-client 
+  namespace: apowine
+  labels:
+    role: client
+    app: admin-client
+    type: cli
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: admin-client
+  template:
+    metadata:
+      name: apowine-admin-client
+      labels:
+        role: client
+        app: admin-client
+        type: cli
+    spec:
+      containers:
+          - name: admin-client
+            image: aporeto/apowine-clientcurl:latest
+            env:
+            - name: URI
+              value: "demo.apowine.svc.cluster.local/admin"
