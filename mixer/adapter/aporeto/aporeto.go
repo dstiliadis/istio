@@ -3,25 +3,12 @@ package aporeto
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"fmt"
-	"sync"
-	"time"
 
-	"github.com/aporeto-inc/trireme-lib/controller/pkg/urisearch"
-
+	"github.com/aporeto-inc/bireme"
 	"istio.io/istio/mixer/adapter/aporeto/config"
 	"istio.io/istio/mixer/pkg/adapter"
-	"istio.io/istio/mixer/pkg/status"
 	"istio.io/istio/mixer/template/authorization"
-
-	"github.com/aporeto-inc/manipulate"
-	"github.com/aporeto-inc/manipulate/maniphttp"
-	"github.com/aporeto-inc/tg/tglib"
-	"github.com/aporeto-inc/trireme-lib/policy"
-
-	mclient "github.com/aporeto-inc/midgard-lib/client"
 )
 
 type (
@@ -30,10 +17,7 @@ type (
 		h      *handler
 	}
 	handler struct {
-		namespace   string
-		manipulator manipulate.Manipulator
-		serviceMap  map[string]*urisearch.APICache
-		sync.RWMutex
+		adapter bireme.Adapter
 	}
 )
 
@@ -44,51 +28,21 @@ var _ authorization.Handler = &handler{}
 // adapter.HandlerBuilder#Build
 func (b *builder) Build(context context.Context, env adapter.Env) (adapter.Handler, error) {
 	env.Logger().Infof("Building aporeto adapter")
-	cert, key, err := tglib.ReadCertificate([]byte(b.adpCfg.GetCertificate()), []byte(b.adpCfg.GetKey()), "aporeto")
+
+	// Create a new Aporeto adapter based on the bireme library
+	adp, err := bireme.NewAporetoAdapter(context, b.adpCfg, env)
 	if err != nil {
-		return nil, fmt.Errorf("Invalid certificate")
-	}
-	tlsCert, err := tglib.ToTLSCertificate(cert, key)
-	if err != nil {
-		return nil, fmt.Errorf("Invalid TLS certificate or key")
-	}
-	rootCAPool, err := x509.SystemCertPool()
-	if err != nil || rootCAPool == nil {
-		rootCAPool = x509.NewCertPool()
-	}
-	if len(b.adpCfg.GetCa()) > 0 {
-		rootCAPool.AppendCertsFromPEM([]byte(b.adpCfg.GetCa()))
+		env.Logger().Errorf("Unable to build Aporeto adapter: %s", err)
+		return nil, err
 	}
 
-	clientTLSConfig := &tls.Config{
-		RootCAs:      rootCAPool,
-		Certificates: []tls.Certificate{tlsCert},
-	}
-
-	m, err := maniphttp.NewHTTPManipulatorWithTokenManager(
-		context,
-		b.adpCfg.Uri,
-		b.adpCfg.Namespace,
-		clientTLSConfig,
-		mclient.NewMidgardTokenManager(b.adpCfg.Uri, time.Hour*1, clientTLSConfig),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("Cannot initiate connection to Aporeto service: %s", err)
-	}
-
-	serviceMap, err := RetrieveServices(context, m, b.adpCfg.Namespace)
-	if err != nil {
-		return nil, fmt.Errorf("Cannot retrieve service map from Aporeto: %s", err)
-	}
-
+	// Create the basic handler object
 	b.h = &handler{
-		namespace:   b.adpCfg.Namespace,
-		manipulator: m,
-		serviceMap:  serviceMap,
+		adapter: adp,
 	}
 
-	monitor := NewMonitor(m, b.h, b.adpCfg.Namespace)
-	env.ScheduleDaemon(func() { monitor.listen(context) })
+	// Start the adapter in the background as a daemon.
+	env.ScheduleDaemon(func() { adp.Run(context) })
 
 	env.Logger().Infof("Succesfully build the Aporeto adapter")
 	return b.h, nil
@@ -104,35 +58,18 @@ func (b *builder) SetAdapterConfig(cfg adapter.Config) {
 
 // adapter.HandlerBuilder#Validate
 func (b *builder) Validate() (ce *adapter.ConfigErrors) {
-	// API Call to validate that we have access to the namespace
+	if b.adpCfg.GetNamespace() == "" {
+		ce.Append("namespace", fmt.Errorf("Namespace cannot be empty"))
+	}
+	if b.adpCfg.GetUri() == "" {
+		ce.Append("service-uri", fmt.Errorf("Service URI cannot be empty"))
+	}
 	return
 }
 
 // metric.Handler#HandleAuthorization
 func (h *handler) HandleAuthorization(ctx context.Context, insts *authorization.Instance) (adapter.CheckResult, error) {
-	h.RLock()
-	defer h.RUnlock()
-	labels := mapLabels(insts)
-
-	cache, ok := h.serviceMap[insts.Action.Service]
-	if !ok {
-		return adapter.CheckResult{
-			Status: status.WithPermissionDenied("Uknown Service\n"),
-		}, nil
-	}
-
-	found := cache.FindAndMatchScope(insts.Action.Method, insts.Action.Path, labels)
-	if !found {
-		// env schedule work here
-		collectFlow(ctx, h.manipulator, h.namespace, cache.ID, policy.Reject, insts.Action.Method, insts.Action.Path, insts)
-		return adapter.CheckResult{
-			Status: status.WithPermissionDenied("Authorization Rejected By Policy\n"),
-		}, nil
-	}
-
-	// Accepted
-	collectFlow(ctx, h.manipulator, h.namespace, cache.ID, policy.Accept, insts.Action.Method, insts.Action.Path, insts)
-	return adapter.CheckResult{Status: status.OK}, nil
+	return h.adapter.Authorize(ctx, insts)
 }
 
 // adapter.Handler#Close

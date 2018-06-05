@@ -32,11 +32,26 @@ spec:
   namespace: "/flash/istio/apowine"
   uri: "https://api.preprod.aporeto.us"
   certificate: |
+    -----BEGIN CERTIFICATE-----
+    MIIBiTCCAS+gAwIBAgIQHEhtGBtTnZqIG1lrUutA0zAKBggqhkjOPQQDAjAkMSIw
+    IAYDVQQDExlwcmVwcm9kIFB1YmxpYyBTaWduaW5nIENBMB4XDTE4MDUyNDAzNTAx
+    OFoXDTE4MTAxOTA3MDAwMFowMjEOMAwGA1UEChMFZmxhc2gxEDAOBgNVBAsTB2Fw
+    b3JldG8xDjAMBgNVBAMTBWlzdGlvMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE
+    zmGdFXbWtYILDcXp8poK6sw3RnMsXGgsbK5br6DxCk0z8QrV+TNugk12k4xchgrY
+    VEi90sq3kLN8XKAyufwt9qM1MDMwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoG
+    CCsGAQUFBwMCMAwGA1UdEwEB/wQCMAAwCgYIKoZIzj0EAwIDSAAwRQIgARzfBHQf
+    8ZNckGDooo3a1PF+aFYGPA0AHYuQRTkg0zACIQCWSNOR0ZGdt9JTqS7EaaCWwldA
+    ewYCj6T4hha6Htdo1w==
     -----END CERTIFICATE-----
   key: | 
+    -----BEGIN EC PRIVATE KEY-----
+    Proc-Type: 4,ENCRYPTED
+    DEK-Info: AES-256-CBC,fc33864fffa57617d80bf543f8222fd1
+
+    DTq52964GepuZ1JDw4KZQGAIpvB8I5ZY9kf0d8jxYRlXo+XbaC2IVOuHNS+5t6sD
+    2wwi7GjC9dqmhC+qPBQsx+NCmGKol55RFiyyZfaZj/ooY5c/xGLvMufKw9kmpRTj
+    KaEdn7ARd3SVehusNbXOT5mQ5112BErBEv6dUTcGgBc=
     -----END EC PRIVATE KEY-----
-  ca: | 
-    -----END CERTIFICATE-----
 ---
 apiVersion: "config.istio.io/v1alpha2"
 kind: rule

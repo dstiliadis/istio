@@ -1493,10 +1493,16 @@ spec:
     spec:
       serviceAccountName: istio-pilot-service-account
       containers:
+      - name: webhook 
+        image: gcr.io/aporetodev/pilot
+        imagePullPolicy: Always
+        volumeMounts: 
+        - name: shared-data
+          mountPath: /var/run/aporeto
       - name: discovery
         image: docker.io/istio/pilot:0.7.1
         imagePullPolicy: IfNotPresent
-        args: ["discovery", "--admission-service", "istio-pilot"]
+        args: ["discovery", "--admission-service",  "istio-pilot" , "--webhookEndpoint", "unix:///var/run/aporeto/aporeto.sock" ]
         ports:
         - containerPort: 8080
         - containerPort: 443
@@ -1516,6 +1522,8 @@ spec:
         volumeMounts:
         - name: config-volume
           mountPath: /etc/istio/config
+        - name: shared-data
+          mountPath: /var/run/aporeto
       - name: istio-proxy
         image: docker.io/istio/proxy:0.7.1
         imagePullPolicy: IfNotPresent
@@ -1537,6 +1545,8 @@ spec:
           mountPath: /etc/certs
           readOnly: true
       volumes:
+      - name: shared-data
+        emptyDir: {}
       - name: config-volume
         configMap:
           name: istio
