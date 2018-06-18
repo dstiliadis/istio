@@ -14,12 +14,15 @@ message Params {
     // Namespace is the Aporeto namespace for policies 
     string namespace = 2;
 
-    // Certificate is the certificate to authenticate with Aporeto
+    // Certificate is the path to the certificate to authenticate with Aporeto
     string certificate = 3;
 
-    // key is the the corresponding private key
+    // key is the path to the corresponding private key
     string key = 4;
 
-    // ca is the Aporeto system CA 
+    // ca is the path to the Aporeto system CA 
     string ca = 5; 
+
+    // password is the private key password, provided in a different place than the secrets 
+    string password = 6;
 }

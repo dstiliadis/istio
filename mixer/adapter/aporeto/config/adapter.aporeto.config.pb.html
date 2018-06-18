@@ -36,7 +36,7 @@ number_of_entries: 1
 <td><code>certificate</code></td>
 <td><code>string</code></td>
 <td>
-<p>Certificate is the certificate to authenticate with Aporeto</p>
+<p>Certificate is the path to the certificate to authenticate with Aporeto</p>
 
 </td>
 </tr>
@@ -44,7 +44,7 @@ number_of_entries: 1
 <td><code>key</code></td>
 <td><code>string</code></td>
 <td>
-<p>key is the the corresponding private key</p>
+<p>key is the path to the corresponding private key</p>
 
 </td>
 </tr>
@@ -52,7 +52,15 @@ number_of_entries: 1
 <td><code>ca</code></td>
 <td><code>string</code></td>
 <td>
-<p>ca is the Aporeto system CA</p>
+<p>ca is the path to the Aporeto system CA</p>
+
+</td>
+</tr>
+<tr id="Params.password">
+<td><code>password</code></td>
+<td><code>string</code></td>
+<td>
+<p>password is the private key password, provided in a different place than the secrets</p>
 
 </td>
 </tr>
