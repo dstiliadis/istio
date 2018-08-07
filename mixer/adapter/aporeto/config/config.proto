@@ -25,4 +25,7 @@ message Params {
 
     // password is the private key password, provided in a different place than the secrets 
     string password = 6;
+
+    // jwtcertificate is the certificate used to sign user JWTs. 
+    string jwtCertificate = 7; 
 }
